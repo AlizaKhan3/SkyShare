@@ -1,15 +1,14 @@
+import AppContainer from "../../components/container";
 import AppNavbar from "../../components/Navbar";
 import "../Home/css/style.scss"
 
 const HomePage = () => {
-    return(
-        <div className="main">
-        <AppNavbar />
-         <h1 className="text-3xl font-bold underline">
-      Hello world!
-    </h1>
+    return (
+        <div>
+            <AppNavbar />
+           <AppContainer />
         </div>
     )
-} 
+}
 
 export default HomePage;

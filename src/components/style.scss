@@ -1,0 +1,25 @@
+$skyBlue: #4A90E2;
+$white: #ffffff;
+$darkBlue: #0D3A71;
+$lightGray: #D3D3D3;
+
+.bg-color{
+    background-color: darkblue;
+}
+// .active-item{
+//     background-color: rgb(133, 133, 133);
+// }
+img {
+    cursor: pointer;
+
+    &:active {
+        opacity: 0.9;
+    }
+    // .app-logo {
+    //     cursor: pointer;
+
+    //     &:active {
+    //         opacity: 0.1;
+    //     }
+    // }
+}
