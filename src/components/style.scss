@@ -1,20 +1,63 @@
 $skyBlue: #4A90E2;
 $white: #ffffff;
 $darkBlue: #0D3A71;
-$lightGray: #D3D3D3;
+$lightGray: #c5c2c2;
 
-.bg-color{
+.bg-color {
     background-color: darkblue;
 }
+
+.main-container {
+    margin-top: 30px;
+    box-shadow: 0 21px 33px 0 rgba(0, 0, 0, 0.15);
+}
+
 // .active-item{
 //     background-color: rgb(133, 133, 133);
 // }
+
+.btns {
+    .del-btn {
+        font-weight: 600;
+        font-size: 15px;
+        color: #963a45;
+
+        &:active {
+            text-decoration: underline;
+            opacity: 0.5;
+
+        }
+
+        &:hover {
+            text-decoration: underline;
+
+        }
+    }
+
+    .download-btn {
+        font-weight: 600;
+        font-size: 15px;
+        color: $skyBlue;
+
+        &:active {
+            text-decoration: underline;
+            opacity: 0.5;
+        }
+
+        &:hover {
+            text-decoration: underline;
+
+        }
+    }
+}
+
 img {
     cursor: pointer;
 
     &:active {
         opacity: 0.9;
     }
+
     // .app-logo {
     //     cursor: pointer;
 
@@ -22,4 +65,240 @@ img {
     //         opacity: 0.1;
     //     }
     // }
+}
+
+.icons-div {
+    cursor: pointer;
+
+    .active-icon {
+        // color: rgba(9,41,121,1);
+        color: $skyBlue;
+    }
+}
+
+.text-section {
+    overflow: hidden;
+    width: 100%;
+
+    .textArea {
+        // &::-webkit-scrollbar {
+        //     display: none;
+        // }
+        overflow: hidden;
+    }
+
+    .display-url {
+        color: $skyBlue;
+        text-decoration: underline;
+        margin: 10px 0px;
+        padding: 15px 0px 2px 15px;
+        display: inline-block;
+        text-overflow: ellipsis;
+        /* For ellipsis to work */
+        overflow: hidden;
+        /* Ensures content is clipped */
+        white-space: nowrap;
+        /* Prevents line wrapping */
+        max-width: 100%;
+        /* Set a maximum width for truncation */
+        font-size: small;
+    }
+}
+
+// .npm__react-simple-code-editor__textarea{
+//     // background-color: #963a45 !important;
+//     // font-family: Verdana, Geneva, Tahoma, sans-serif !important;
+//     // color: #000 !important;
+//     &:focus-visible{
+//         outline: none;
+//     }
+// }
+
+.files-section {
+
+    // min-height: 100% !important;
+    .files-text {
+        margin: 38px 0px;
+    }
+
+    .drop-zone {
+        // background-color: #0D3A71;
+        // padding: ;
+        height: 100%;
+        border-radius: 3px;
+        text-align: center;
+        display: flex;
+        // align-items: center;
+        justify-content: center;
+
+        p {
+            color: black;
+            font-weight: 300;
+            line-height: 22px;
+
+            span {
+                color: $skyBlue;
+                font-weight: 400;
+            }
+        }
+    }
+}
+
+
+// .text-section {
+//     overflow: hidden;
+//     width: 100%;
+
+//     // .resize-section {
+//         div {
+//             // background-color: #963a45;
+//             &:focus-visible {
+//                 background-color: #0D3A71;
+//                 outline: none !important;
+//                 border: none !important;
+//             }
+//             pre {
+//                 textarea {
+//                     overflow: hidden;
+//                     &:active {
+//                         background-color: #0D3A71;
+//                         outline: none !important;
+//                         border: none !important;
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// // }
+
+.files-list {
+    display: flex;
+    gap: 2px;
+    min-width: 100%;
+    flex-wrap: wrap;
+    min-width: 100%;
+    width: 100%;
+
+    // width: 80px !important;
+    div {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        // background-color: #0D3A71;
+        width: 80px;
+        height: 90px;
+        text-align: center;
+        margin: 2px;
+        border-radius: 2px;
+        padding: 2px 4px;
+        cursor: pointer;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+        white-space: normal;
+
+        img {
+            height: 90px;
+            object-fit: fill;
+        }
+
+        svg {
+            // color: $lightGray;
+            height: 30px !important;
+            width: 30px;
+            margin-bottom: 3px;
+            margin-top: 4px;
+        }
+
+        &:hover {
+            background-color: #d9d9d9;
+        }
+
+        p {
+            font-size: 9px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            text-align: center;
+            white-space: normal;
+            word-break: break-all;
+        }
+
+        span {
+            font-size: 10px;
+            color: $skyBlue;
+            font-weight: 400;
+        }
+    }
+}
+
+.temp-files{
+    filter: brightness(50%);
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    .upload-loader{
+        width: 25px;
+        height: 25px;
+        position: absolute;
+    }
+}
+
+@media screen and (max-width: 773px) {
+    .files-list {
+        gap: 4px; // Adjust gap for smaller screens
+        justify-content: center; // Center align for smaller screens
+
+        div {
+            width: 60px; // Reduce width for each file div
+
+            p {
+                font-size: 8px; // Reduce font size to fit better
+            }
+
+            svg {
+                height: 24px;
+                width: 24px;
+            }
+        }
+    }
+}
+
+@media only screen and (max-width:500px) {
+    .icons-div {
+        svg {
+            height: 30px !important;
+            width: 30px !important;
+        }
+    }
+
+    .heading {
+        font-size: 24px !important;
+    }
+
+    .files-list {
+        gap: 6px;
+
+        div {
+            width: 50px; // Further reduce width for very small screens
+
+            p {
+                font-size: 7px;
+            }
+        }
+    }
+}
+
+@media only screen and (max-width: 400px) {
+    .icons-div {
+        svg {
+            height: 20px !important;
+            width: 20px !important;
+        }
+    }
+
+    .heading {
+        font-size: 20px !important;
+    }
 }
