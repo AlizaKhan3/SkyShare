@@ -28,7 +28,7 @@ const AppContainer = () => {
     const [tempFiles, setTempFiles] = useState([]);
     const [isText, setIsText] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [networkStatus, setNetworkStatus] = useState("Detecting your Wi‑Fi…");
+    const [networkStatus, setNetworkStatus] = useState("Connecting to your Wi‑Fi room…");
 
     const textAreaRef = useRef();
     const resizeTextArea = () => {
@@ -106,7 +106,7 @@ const AppContainer = () => {
             try {
                 await getRoomId();
                 if (!active) return;
-                setNetworkStatus("Same Wi‑Fi only — others on this network can see this");
+                setNetworkStatus("Only devices on your Wi‑Fi can see this");
 
                 unsubText = await subscribeText((text) => {
                     if (!active) return;
@@ -120,7 +120,7 @@ const AppContainer = () => {
             } catch (error) {
                 console.error("Network room / realtime failed", error);
                 if (active) {
-                    setNetworkStatus(error?.message || "Could not join your Wi‑Fi room.");
+                    setNetworkStatus(error?.message || "Could not detect your Wi‑Fi network.");
                 }
             }
         })();

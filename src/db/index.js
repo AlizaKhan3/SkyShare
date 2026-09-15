@@ -47,19 +47,42 @@ async function hashToRoomId(value) {
     .slice(0, 32);
 }
 
-/** Same Wi‑Fi / router usually shares one public IP — used as the room key (like AirForShare). */
+async function fetchPublicIpv4() {
+  // IPv4-only so phone/laptop don't split across IPv4 vs IPv6 rooms.
+  const endpoints = [
+    "https://api4.ipify.org?format=json",
+    "https://ipv4.icanhazip.com",
+    "https://api.ipify.org?format=json",
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        const ip = String(data?.ip || "").trim();
+        if (ip && !ip.includes(":")) return ip;
+      } else {
+        const text = (await response.text()).trim();
+        if (text && !text.includes(":")) return text;
+      }
+    } catch {
+      // try next endpoint
+    }
+  }
+
+  throw new Error("Could not detect your network. Check your connection.");
+}
+
+/** Devices on the same Wi‑Fi/router usually share one public IPv4 → same room. */
 export async function getRoomId() {
   if (!roomIdPromise) {
     roomIdPromise = (async () => {
-      const response = await fetch("https://api.ipify.org?format=json");
-      if (!response.ok) {
-        throw new Error("Could not detect your network. Check your connection.");
-      }
-      const { ip } = await response.json();
-      if (!ip) {
-        throw new Error("Could not detect your network IP.");
-      }
-      return hashToRoomId(ip);
+      const ip = await fetchPublicIpv4();
+      return hashToRoomId(`ip4:${ip}`);
     })().catch((error) => {
       roomIdPromise = null;
       throw error;
