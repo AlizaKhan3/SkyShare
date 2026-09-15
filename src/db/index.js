@@ -19,8 +19,6 @@ const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
 
-const SHARED_ROW_ID = "shared";
-
 const publicPermissions = [
   Permission.read(Role.any()),
   Permission.update(Role.any()),
@@ -38,26 +36,60 @@ const tablesDB = new TablesDB(client);
 const storage = new Storage(client);
 const realtime = new Realtime(client);
 
+let roomIdPromise = null;
+
+async function hashToRoomId(value) {
+  const data = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
+}
+
+/** Same Wi‑Fi / router usually shares one public IP — used as the room key (like AirForShare). */
+export async function getRoomId() {
+  if (!roomIdPromise) {
+    roomIdPromise = (async () => {
+      const response = await fetch("https://api.ipify.org?format=json");
+      if (!response.ok) {
+        throw new Error("Could not detect your network. Check your connection.");
+      }
+      const { ip } = await response.json();
+      if (!ip) {
+        throw new Error("Could not detect your network IP.");
+      }
+      return hashToRoomId(ip);
+    })().catch((error) => {
+      roomIdPromise = null;
+      throw error;
+    });
+  }
+  return roomIdPromise;
+}
+
 function isNotFound(error) {
   return error?.code === 404;
 }
 
 export async function saveText(text) {
+  const roomId = await getRoomId();
   return tablesDB.upsertRow({
     databaseId,
     tableId: textTableId,
-    rowId: SHARED_ROW_ID,
+    rowId: roomId,
     data: { text },
     permissions: publicPermissions,
   });
 }
 
 export async function clearText() {
+  const roomId = await getRoomId();
   try {
     await tablesDB.deleteRow({
       databaseId,
       tableId: textTableId,
-      rowId: SHARED_ROW_ID,
+      rowId: roomId,
     });
   } catch (error) {
     if (!isNotFound(error)) throw error;
@@ -65,11 +97,12 @@ export async function clearText() {
 }
 
 export async function getText() {
+  const roomId = await getRoomId();
   try {
     const row = await tablesDB.getRow({
       databaseId,
       tableId: textTableId,
-      rowId: SHARED_ROW_ID,
+      rowId: roomId,
     });
     return row?.text || "";
   } catch (error) {
@@ -79,11 +112,12 @@ export async function getText() {
 }
 
 export async function subscribeText(onChange) {
+  const roomId = await getRoomId();
   const text = await getText();
   onChange(text);
 
   const subscription = await realtime.subscribe(
-    Channel.tablesdb(databaseId).table(textTableId).row(SHARED_ROW_ID),
+    Channel.tablesdb(databaseId).table(textTableId).row(roomId),
     (event) => {
       const deleted = (event.events || []).some((name) =>
         String(name).includes(".delete")
@@ -102,21 +136,23 @@ export async function subscribeText(onChange) {
 }
 
 export async function saveFiles(files) {
+  const roomId = await getRoomId();
   return tablesDB.upsertRow({
     databaseId,
     tableId: filesTableId,
-    rowId: SHARED_ROW_ID,
+    rowId: roomId,
     data: { files: JSON.stringify(files || []) },
     permissions: publicPermissions,
   });
 }
 
 export async function clearFiles() {
+  const roomId = await getRoomId();
   try {
     await tablesDB.deleteRow({
       databaseId,
       tableId: filesTableId,
-      rowId: SHARED_ROW_ID,
+      rowId: roomId,
     });
   } catch (error) {
     if (!isNotFound(error)) throw error;
@@ -124,11 +160,12 @@ export async function clearFiles() {
 }
 
 export async function getFiles() {
+  const roomId = await getRoomId();
   try {
     const row = await tablesDB.getRow({
       databaseId,
       tableId: filesTableId,
-      rowId: SHARED_ROW_ID,
+      rowId: roomId,
     });
     if (!row?.files) return [];
     return typeof row.files === "string" ? JSON.parse(row.files) : row.files;
@@ -139,11 +176,12 @@ export async function getFiles() {
 }
 
 export async function subscribeFiles(onChange) {
+  const roomId = await getRoomId();
   const files = await getFiles();
   onChange(files);
 
   const subscription = await realtime.subscribe(
-    Channel.tablesdb(databaseId).table(filesTableId).row(SHARED_ROW_ID),
+    Channel.tablesdb(databaseId).table(filesTableId).row(roomId),
     (event) => {
       const deleted = (event.events || []).some((name) =>
         String(name).includes(".delete")

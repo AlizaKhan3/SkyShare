@@ -16,6 +16,7 @@ import {
     clearFiles,
     subscribeFiles,
     uploadFile,
+    getRoomId,
 } from "../db/index.js";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -27,6 +28,7 @@ const AppContainer = () => {
     const [tempFiles, setTempFiles] = useState([]);
     const [isText, setIsText] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [networkStatus, setNetworkStatus] = useState("Detecting your Wi‑Fi…");
 
     const textAreaRef = useRef();
     const resizeTextArea = () => {
@@ -102,6 +104,10 @@ const AppContainer = () => {
 
         (async () => {
             try {
+                await getRoomId();
+                if (!active) return;
+                setNetworkStatus("Same Wi‑Fi only — others on this network can see this");
+
                 unsubText = await subscribeText((text) => {
                     if (!active) return;
                     setTextValue(text || "");
@@ -112,7 +118,10 @@ const AppContainer = () => {
                     setFiles(Array.isArray(nextFiles) ? nextFiles : []);
                 });
             } catch (error) {
-                console.error("Realtime subscribe failed", error);
+                console.error("Network room / realtime failed", error);
+                if (active) {
+                    setNetworkStatus(error?.message || "Could not join your Wi‑Fi room.");
+                }
             }
         })();
 
@@ -151,6 +160,7 @@ const AppContainer = () => {
                             <LuFiles onClick={() => setType("files")} style={{ height: "100px", width: "40px" }} className={type === "files" && "active-icon"} />
                         </div>
                     </div>
+                    <p className="text-sm text-gray-500 mb-2">{networkStatus}</p>
                     {type === "files" ? (
                         <div className="btns flex justify-between" style={{ gap: "5px", display: "flex", flexDirection: "row-reverse", margin: "10px 0px" }}>
                             <Button onClick={clearFilesSection} className="del-btn" size="small" type="secondary" ghost><MdDeleteOutline /> Delete All </Button>
