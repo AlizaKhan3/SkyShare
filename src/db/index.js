@@ -20,6 +20,7 @@ const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
 const roomFunctionId = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_ID;
+const roomFunctionUrl = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_URL;
 
 const publicPermissions = [
   Permission.read(Role.any()),
@@ -33,6 +34,12 @@ if (!projectId || !databaseId) {
   );
 }
 
+if (!roomFunctionId && !roomFunctionUrl) {
+  console.warn(
+    "[SkyShare] Missing room function config. Set VITE_APPWRITE_ROOM_FUNCTION_ID or VITE_APPWRITE_ROOM_FUNCTION_URL."
+  );
+}
+
 const client = new Client().setEndpoint(endpoint).setProject(projectId || "");
 const tablesDB = new TablesDB(client);
 const storage = new Storage(client);
@@ -41,111 +48,80 @@ const functions = new Functions(client);
 
 let roomIdPromise = null;
 
-async function hashToRoomId(value) {
-  const data = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 32);
-}
-
-async function fetchCloudflareIpv4() {
-  const response = await fetch("https://www.cloudflare.com/cdn-cgi/trace", {
+async function getRoomIdFromHttp() {
+  const response = await fetch(roomFunctionUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Appwrite-Project": projectId,
+    },
+    body: "{}",
     cache: "no-store",
   });
-  if (!response.ok) {
-    throw new Error("Cloudflare IP lookup failed");
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.roomId) {
+    throw new Error(body.error || `Room HTTP call failed (${response.status})`);
   }
-
-  const text = await response.text();
-  const match = text.match(/^ip=([^\n\r]+)/m);
-  const ip = match?.[1]?.trim();
-
-  if (!ip || ip.includes(":")) {
-    throw new Error("Cloudflare returned no IPv4 address");
-  }
-
-  return ip;
+  return body.roomId;
 }
 
-async function fetchIpifyIpv4() {
-  const response = await fetch("https://api4.ipify.org?format=json", {
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error("ipify IP lookup failed");
-  }
-
-  const data = await response.json();
-  const ip = String(data?.ip || "").trim();
-
-  if (!ip || ip.includes(":")) {
-    throw new Error("ipify returned no IPv4 address");
-  }
-
-  return ip;
-}
-
-async function fetchPublicIpv4() {
-  const results = await Promise.allSettled([
-    fetchCloudflareIpv4(),
-    fetchIpifyIpv4(),
-  ]);
-
-  const ips = results
-    .filter((result) => result.status === "fulfilled")
-    .map((result) => result.value);
-
-  if (ips.length === 0) {
-    throw new Error("Could not detect your network. Check your connection.");
-  }
-
-  const uniqueIps = [...new Set(ips)];
-  if (uniqueIps.length > 1) {
-    console.warn("[SkyShare] IP sources disagreed, using Cloudflare:", uniqueIps);
-    return ips[0];
-  }
-
-  return ips[0];
-}
-
-async function getRoomIdFromFunction() {
+async function getRoomIdFromSdk() {
   const execution = await functions.createExecution({
     functionId: roomFunctionId,
+    body: "{}",
     async: false,
+    method: "POST",
   });
 
   if (execution.status !== "completed") {
-    throw new Error("Room function did not complete");
+    throw new Error(
+      `Room function status: ${execution.status}. ${execution.errors || ""}`.trim()
+    );
   }
 
   const body = JSON.parse(execution.responseBody || "{}");
   if (!body.roomId) {
     throw new Error(body.error || "Room function returned no room id");
   }
-
   return body.roomId;
 }
 
+/**
+ * Always use the Appwrite room function (same algorithm for every browser).
+ * No client-IP fallback — that caused different Chrome profiles to land in different rooms.
+ */
 async function detectRoomId() {
-  if (roomFunctionId) {
+  const errors = [];
+
+  if (roomFunctionUrl) {
     try {
-      const roomId = await getRoomIdFromFunction();
-      console.info("[SkyShare] room via Appwrite function:", roomId);
+      const roomId = await getRoomIdFromHttp();
+      console.info("[SkyShare] room via function URL:", roomId);
       return roomId;
     } catch (error) {
-      console.warn("[SkyShare] room function failed, using client IP fallback", error);
+      console.warn("[SkyShare] function URL failed", error);
+      errors.push(error?.message || String(error));
     }
   }
 
-  const ip = await fetchPublicIpv4();
-  const roomId = await hashToRoomId(`ip4:${ip}`);
-  console.info("[SkyShare] room via public IPv4:", ip, "→", roomId);
-  return roomId;
+  if (roomFunctionId) {
+    try {
+      const roomId = await getRoomIdFromSdk();
+      console.info("[SkyShare] room via Appwrite SDK:", roomId);
+      return roomId;
+    } catch (error) {
+      console.warn("[SkyShare] function SDK failed", error);
+      errors.push(error?.message || String(error));
+    }
+  }
+
+  throw new Error(
+    errors[0] ||
+      "Could not detect your network room. Check the Appwrite room-id function."
+  );
 }
 
-/** Same Wi‑Fi/router → same public IPv4 → same Appwrite row. */
 export async function getRoomId() {
   if (!roomIdPromise) {
     roomIdPromise = detectRoomId().catch((error) => {
