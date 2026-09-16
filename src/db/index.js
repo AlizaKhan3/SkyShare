@@ -20,7 +20,6 @@ const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
 const roomFunctionId = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_ID;
-const roomFunctionUrl = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_URL;
 
 const publicPermissions = [
   Permission.read(Role.any()),
@@ -34,9 +33,9 @@ if (!projectId || !databaseId) {
   );
 }
 
-if (!roomFunctionId && !roomFunctionUrl) {
+if (!roomFunctionId) {
   console.warn(
-    "[SkyShare] Missing room function config. Set VITE_APPWRITE_ROOM_FUNCTION_ID or VITE_APPWRITE_ROOM_FUNCTION_URL."
+    "[SkyShare] Missing VITE_APPWRITE_ROOM_FUNCTION_ID — same-network sharing will not work."
   );
 }
 
@@ -48,25 +47,11 @@ const functions = new Functions(client);
 
 let roomIdPromise = null;
 
-async function getRoomIdFromHttp() {
-  const response = await fetch(roomFunctionUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Appwrite-Project": projectId,
-    },
-    body: "{}",
-    cache: "no-store",
-  });
-
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body.roomId) {
-    throw new Error(body.error || `Room HTTP call failed (${response.status})`);
-  }
-  return body.roomId;
-}
-
 async function getRoomIdFromSdk() {
+  if (!roomFunctionId) {
+    throw new Error("Room function is not configured.");
+  }
+
   const execution = await functions.createExecution({
     functionId: roomFunctionId,
     body: "{}",
@@ -80,46 +65,28 @@ async function getRoomIdFromSdk() {
     );
   }
 
-  const body = JSON.parse(execution.responseBody || "{}");
+  let body = {};
+  try {
+    body = JSON.parse(execution.responseBody || "{}");
+  } catch {
+    throw new Error("Room function returned invalid JSON");
+  }
+
   if (!body.roomId) {
     throw new Error(body.error || "Room function returned no room id");
   }
-  return body.roomId;
+
+  return body;
 }
 
-/**
- * Always use the Appwrite room function (same algorithm for every browser).
- * No client-IP fallback — that caused different Chrome profiles to land in different rooms.
- */
 async function detectRoomId() {
-  const errors = [];
-
-  if (roomFunctionUrl) {
-    try {
-      const roomId = await getRoomIdFromHttp();
-      console.info("[SkyShare] room via function URL:", roomId);
-      return roomId;
-    } catch (error) {
-      console.warn("[SkyShare] function URL failed", error);
-      errors.push(error?.message || String(error));
-    }
-  }
-
-  if (roomFunctionId) {
-    try {
-      const roomId = await getRoomIdFromSdk();
-      console.info("[SkyShare] room via Appwrite SDK:", roomId);
-      return roomId;
-    } catch (error) {
-      console.warn("[SkyShare] function SDK failed", error);
-      errors.push(error?.message || String(error));
-    }
-  }
-
-  throw new Error(
-    errors[0] ||
-      "Could not detect your network room. Check the Appwrite room-id function."
+  const result = await getRoomIdFromSdk();
+  console.info(
+    "[SkyShare] network room:",
+    result.roomId,
+    result.kind ? `(${result.kind})` : ""
   );
+  return result.roomId;
 }
 
 export async function getRoomId() {
