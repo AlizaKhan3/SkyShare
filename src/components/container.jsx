@@ -17,6 +17,7 @@ import {
     subscribeFiles,
     uploadFile,
     getRoomId,
+    resetRoomId,
 } from "../db/index.js";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -102,11 +103,14 @@ const AppContainer = () => {
         let unsubText = () => {};
         let unsubFiles = () => {};
 
-        (async () => {
+        const connect = async () => {
             try {
                 await getRoomId();
                 if (!active) return;
                 setNetworkStatus("Only devices on your Wi‑Fi can see this");
+
+                unsubText();
+                unsubFiles();
 
                 unsubText = await subscribeText((text) => {
                     if (!active) return;
@@ -123,10 +127,21 @@ const AppContainer = () => {
                     setNetworkStatus(error?.message || "Could not detect your Wi‑Fi network.");
                 }
             }
-        })();
+        };
+
+        connect();
+
+        const onVisible = () => {
+            if (document.visibilityState === "visible") {
+                resetRoomId();
+                connect();
+            }
+        };
+        document.addEventListener("visibilitychange", onVisible);
 
         return () => {
             active = false;
+            document.removeEventListener("visibilitychange", onVisible);
             unsubText();
             unsubFiles();
         };

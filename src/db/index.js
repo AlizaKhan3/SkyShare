@@ -3,6 +3,7 @@ import {
   TablesDB,
   Storage,
   Realtime,
+  Functions,
   ID,
   Permission,
   Role,
@@ -18,6 +19,7 @@ const textTableId =
 const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
+const roomFunctionId = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_ID;
 
 const publicPermissions = [
   Permission.read(Role.any()),
@@ -35,6 +37,7 @@ const client = new Client().setEndpoint(endpoint).setProject(projectId || "");
 const tablesDB = new TablesDB(client);
 const storage = new Storage(client);
 const realtime = new Realtime(client);
+const functions = new Functions(client);
 
 let roomIdPromise = null;
 
@@ -47,48 +50,114 @@ async function hashToRoomId(value) {
     .slice(0, 32);
 }
 
+async function fetchCloudflareIpv4() {
+  const response = await fetch("https://www.cloudflare.com/cdn-cgi/trace", {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error("Cloudflare IP lookup failed");
+  }
+
+  const text = await response.text();
+  const match = text.match(/^ip=([^\n\r]+)/m);
+  const ip = match?.[1]?.trim();
+
+  if (!ip || ip.includes(":")) {
+    throw new Error("Cloudflare returned no IPv4 address");
+  }
+
+  return ip;
+}
+
+async function fetchIpifyIpv4() {
+  const response = await fetch("https://api4.ipify.org?format=json", {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error("ipify IP lookup failed");
+  }
+
+  const data = await response.json();
+  const ip = String(data?.ip || "").trim();
+
+  if (!ip || ip.includes(":")) {
+    throw new Error("ipify returned no IPv4 address");
+  }
+
+  return ip;
+}
+
 async function fetchPublicIpv4() {
-  // IPv4-only so phone/laptop don't split across IPv4 vs IPv6 rooms.
-  const endpoints = [
-    "https://api4.ipify.org?format=json",
-    "https://ipv4.icanhazip.com",
-    "https://api.ipify.org?format=json",
-  ];
+  const results = await Promise.allSettled([
+    fetchCloudflareIpv4(),
+    fetchIpifyIpv4(),
+  ]);
 
-  for (const url of endpoints) {
+  const ips = results
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+
+  if (ips.length === 0) {
+    throw new Error("Could not detect your network. Check your connection.");
+  }
+
+  const uniqueIps = [...new Set(ips)];
+  if (uniqueIps.length > 1) {
+    console.warn("[SkyShare] IP sources disagreed, using Cloudflare:", uniqueIps);
+    return ips[0];
+  }
+
+  return ips[0];
+}
+
+async function getRoomIdFromFunction() {
+  const execution = await functions.createExecution({
+    functionId: roomFunctionId,
+    async: false,
+  });
+
+  if (execution.status !== "completed") {
+    throw new Error("Room function did not complete");
+  }
+
+  const body = JSON.parse(execution.responseBody || "{}");
+  if (!body.roomId) {
+    throw new Error(body.error || "Room function returned no room id");
+  }
+
+  return body.roomId;
+}
+
+async function detectRoomId() {
+  if (roomFunctionId) {
     try {
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) continue;
-
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const data = await response.json();
-        const ip = String(data?.ip || "").trim();
-        if (ip && !ip.includes(":")) return ip;
-      } else {
-        const text = (await response.text()).trim();
-        if (text && !text.includes(":")) return text;
-      }
-    } catch {
-      // try next endpoint
+      const roomId = await getRoomIdFromFunction();
+      console.info("[SkyShare] room via Appwrite function:", roomId);
+      return roomId;
+    } catch (error) {
+      console.warn("[SkyShare] room function failed, using client IP fallback", error);
     }
   }
 
-  throw new Error("Could not detect your network. Check your connection.");
+  const ip = await fetchPublicIpv4();
+  const roomId = await hashToRoomId(`ip4:${ip}`);
+  console.info("[SkyShare] room via public IPv4:", ip, "→", roomId);
+  return roomId;
 }
 
-/** Devices on the same Wi‑Fi/router usually share one public IPv4 → same room. */
+/** Same Wi‑Fi/router → same public IPv4 → same Appwrite row. */
 export async function getRoomId() {
   if (!roomIdPromise) {
-    roomIdPromise = (async () => {
-      const ip = await fetchPublicIpv4();
-      return hashToRoomId(`ip4:${ip}`);
-    })().catch((error) => {
+    roomIdPromise = detectRoomId().catch((error) => {
       roomIdPromise = null;
       throw error;
     });
   }
   return roomIdPromise;
+}
+
+export function resetRoomId() {
+  roomIdPromise = null;
 }
 
 function isNotFound(error) {
