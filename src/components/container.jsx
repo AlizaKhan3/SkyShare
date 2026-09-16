@@ -17,7 +17,6 @@ import {
     subscribeFiles,
     uploadFile,
     getRoomId,
-    resetRoomId,
 } from "../db/index.js";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
@@ -133,7 +132,7 @@ const AppContainer = () => {
 
         const onVisible = () => {
             if (document.visibilityState === "visible") {
-                resetRoomId();
+                // Re-fetch content when returning to the tab (don't reset room — same network)
                 connect();
             }
         };

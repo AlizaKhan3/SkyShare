@@ -3,7 +3,6 @@ import {
   TablesDB,
   Storage,
   Realtime,
-  Functions,
   ID,
   Permission,
   Role,
@@ -19,7 +18,8 @@ const textTableId =
 const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
-const roomFunctionId = import.meta.env.VITE_APPWRITE_ROOM_FUNCTION_ID;
+
+const POLL_MS = 2000;
 
 const publicPermissions = [
   Permission.read(Role.any()),
@@ -33,65 +33,67 @@ if (!projectId || !databaseId) {
   );
 }
 
-if (!roomFunctionId) {
-  console.warn(
-    "[SkyShare] Missing VITE_APPWRITE_ROOM_FUNCTION_ID — same-network sharing will not work."
-  );
-}
-
 const client = new Client().setEndpoint(endpoint).setProject(projectId || "");
 const tablesDB = new TablesDB(client);
 const storage = new Storage(client);
 const realtime = new Realtime(client);
-const functions = new Functions(client);
 
 let roomIdPromise = null;
 
-async function getRoomIdFromSdk() {
-  if (!roomFunctionId) {
-    throw new Error("Room function is not configured.");
-  }
-
-  const execution = await functions.createExecution({
-    functionId: roomFunctionId,
-    body: "{}",
-    async: false,
-    method: "POST",
-  });
-
-  if (execution.status !== "completed") {
-    throw new Error(
-      `Room function status: ${execution.status}. ${execution.errors || ""}`.trim()
-    );
-  }
-
-  let body = {};
-  try {
-    body = JSON.parse(execution.responseBody || "{}");
-  } catch {
-    throw new Error("Room function returned invalid JSON");
-  }
-
-  if (!body.roomId) {
-    throw new Error(body.error || "Room function returned no room id");
-  }
-
-  return body;
+async function hashToRoomId(value) {
+  const data = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32);
 }
 
-async function detectRoomId() {
-  const result = await getRoomIdFromSdk();
-  console.info(
-    "[SkyShare] network room:",
-    result.roomId,
-    result.kind ? `(${result.kind})` : ""
+/**
+ * IPv4 only — same Wi‑Fi / same hotspot share one public IPv4.
+ * Appwrite's client-IP was mixing IPv4/IPv6 across phone vs laptop.
+ */
+async function fetchPublicIpv4() {
+  const endpoints = [
+    "https://api4.ipify.org?format=json",
+    "https://ipv4.icanhazip.com",
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+
+      const contentType = response.headers.get("content-type") || "";
+      let ip = "";
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        ip = String(data?.ip || "").trim();
+      } else {
+        ip = (await response.text()).trim();
+      }
+
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+        return ip;
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  throw new Error(
+    "Could not detect your public IPv4. Check connection / disable VPN."
   );
-  return result.roomId;
 }
 
 export async function getRoomId() {
   if (!roomIdPromise) {
-    roomIdPromise = detectRoomId().catch((error) => {
+    roomIdPromise = (async () => {
+      const ip = await fetchPublicIpv4();
+      const roomId = await hashToRoomId(`net:v4:${ip}`);
+      console.info("[SkyShare] network room:", roomId, "(ipv4)", ip);
+      return roomId;
+    })().catch((error) => {
       roomIdPromise = null;
       throw error;
     });
@@ -148,25 +150,46 @@ export async function getText() {
 
 export async function subscribeText(onChange) {
   const roomId = await getRoomId();
-  const text = await getText();
-  onChange(text);
 
-  const subscription = await realtime.subscribe(
-    Channel.tablesdb(databaseId).table(textTableId).row(roomId),
-    (event) => {
-      const deleted = (event.events || []).some((name) =>
-        String(name).includes(".delete")
-      );
-      if (deleted) {
-        onChange("");
-        return;
-      }
-      onChange(event.payload?.text || "");
+  const push = async () => {
+    try {
+      onChange(await getText());
+    } catch (error) {
+      console.warn("[SkyShare] text poll failed", error);
     }
-  );
+  };
+
+  await push();
+
+  // Polling is the reliable sync path (Appwrite realtime is inconsistent here)
+  const intervalId = setInterval(push, POLL_MS);
+
+  let subscription = null;
+  try {
+    subscription = await realtime.subscribe(
+      Channel.tablesdb(databaseId).table(textTableId).row(roomId),
+      (event) => {
+        const deleted = (event.events || []).some((name) =>
+          String(name).includes(".delete")
+        );
+        if (deleted) {
+          onChange("");
+          return;
+        }
+        if (event.payload?.text != null) {
+          onChange(event.payload.text || "");
+        } else {
+          push();
+        }
+      }
+    );
+  } catch (error) {
+    console.warn("[SkyShare] text realtime unavailable, using poll only", error);
+  }
 
   return () => {
-    subscription.unsubscribe();
+    clearInterval(intervalId);
+    subscription?.unsubscribe?.();
   };
 }
 
@@ -212,31 +235,46 @@ export async function getFiles() {
 
 export async function subscribeFiles(onChange) {
   const roomId = await getRoomId();
-  const files = await getFiles();
-  onChange(files);
 
-  const subscription = await realtime.subscribe(
-    Channel.tablesdb(databaseId).table(filesTableId).row(roomId),
-    (event) => {
-      const deleted = (event.events || []).some((name) =>
-        String(name).includes(".delete")
-      );
-      if (deleted) {
-        onChange([]);
-        return;
-      }
-
-      const raw = event.payload?.files;
-      if (!raw) {
-        onChange([]);
-        return;
-      }
-      onChange(typeof raw === "string" ? JSON.parse(raw) : raw);
+  const push = async () => {
+    try {
+      onChange(await getFiles());
+    } catch (error) {
+      console.warn("[SkyShare] files poll failed", error);
     }
-  );
+  };
+
+  await push();
+
+  const intervalId = setInterval(push, POLL_MS);
+
+  let subscription = null;
+  try {
+    subscription = await realtime.subscribe(
+      Channel.tablesdb(databaseId).table(filesTableId).row(roomId),
+      (event) => {
+        const deleted = (event.events || []).some((name) =>
+          String(name).includes(".delete")
+        );
+        if (deleted) {
+          onChange([]);
+          return;
+        }
+        const raw = event.payload?.files;
+        if (raw == null) {
+          push();
+          return;
+        }
+        onChange(typeof raw === "string" ? JSON.parse(raw) : raw);
+      }
+    );
+  } catch (error) {
+    console.warn("[SkyShare] files realtime unavailable, using poll only", error);
+  }
 
   return () => {
-    subscription.unsubscribe();
+    clearInterval(intervalId);
+    subscription?.unsubscribe?.();
   };
 }
 
