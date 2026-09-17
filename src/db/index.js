@@ -19,7 +19,8 @@ const filesTableId =
   import.meta.env.VITE_APPWRITE_FILES_TABLE_ID || "file_sharing";
 const bucketId = import.meta.env.VITE_APPWRITE_BUCKET_ID || "files";
 
-const POLL_MS = 2000;
+const POLL_MS = 2500;
+const TTL_MS = 10 * 60 * 1000; // auto-delete after 10 minutes
 
 const publicPermissions = [
   Permission.read(Role.any()),
@@ -39,6 +40,9 @@ const storage = new Storage(client);
 const realtime = new Realtime(client);
 
 let roomIdPromise = null;
+/** Avoid repeating 404 GETs while a room has no row yet */
+const textRowMissing = new Set();
+const filesRowMissing = new Set();
 
 async function hashToRoomId(value) {
   const data = new TextEncoder().encode(value);
@@ -49,10 +53,6 @@ async function hashToRoomId(value) {
     .slice(0, 32);
 }
 
-/**
- * IPv4 only — same Wi‑Fi / same hotspot share one public IPv4.
- * Appwrite's client-IP was mixing IPv4/IPv6 across phone vs laptop.
- */
 async function fetchPublicIpv4() {
   const endpoints = [
     "https://api4.ipify.org?format=json",
@@ -103,21 +103,31 @@ export async function getRoomId() {
 
 export function resetRoomId() {
   roomIdPromise = null;
+  textRowMissing.clear();
+  filesRowMissing.clear();
 }
 
 function isNotFound(error) {
   return error?.code === 404;
 }
 
+function isExpired(row) {
+  const stamp = row?.$updatedAt || row?.$createdAt;
+  if (!stamp) return false;
+  return Date.now() - new Date(stamp).getTime() > TTL_MS;
+}
+
 export async function saveText(text) {
   const roomId = await getRoomId();
-  return tablesDB.upsertRow({
+  const row = await tablesDB.upsertRow({
     databaseId,
     tableId: textTableId,
     rowId: roomId,
     data: { text },
     permissions: publicPermissions,
   });
+  textRowMissing.delete(roomId);
+  return row;
 }
 
 export async function clearText() {
@@ -131,37 +141,52 @@ export async function clearText() {
   } catch (error) {
     if (!isNotFound(error)) throw error;
   }
+  textRowMissing.add(roomId);
 }
 
 export async function getText() {
   const roomId = await getRoomId();
+  if (textRowMissing.has(roomId)) return "";
+
   try {
     const row = await tablesDB.getRow({
       databaseId,
       tableId: textTableId,
       rowId: roomId,
     });
+
+    if (isExpired(row)) {
+      await clearText();
+      return "";
+    }
+
+    textRowMissing.delete(roomId);
     return row?.text || "";
   } catch (error) {
-    if (isNotFound(error)) return "";
+    if (isNotFound(error)) {
+      textRowMissing.add(roomId);
+      return "";
+    }
     throw error;
   }
 }
 
 export async function subscribeText(onChange) {
   const roomId = await getRoomId();
+  let lastSent = Symbol("init");
 
   const push = async () => {
     try {
-      onChange(await getText());
+      const text = await getText();
+      if (text === lastSent) return;
+      lastSent = text;
+      onChange(text);
     } catch (error) {
       console.warn("[SkyShare] text poll failed", error);
     }
   };
 
   await push();
-
-  // Polling is the reliable sync path (Appwrite realtime is inconsistent here)
   const intervalId = setInterval(push, POLL_MS);
 
   let subscription = null;
@@ -173,11 +198,22 @@ export async function subscribeText(onChange) {
           String(name).includes(".delete")
         );
         if (deleted) {
+          textRowMissing.add(roomId);
+          lastSent = "";
           onChange("");
           return;
         }
+        textRowMissing.delete(roomId);
+        if (event.payload?.$updatedAt && isExpired(event.payload)) {
+          clearText().then(() => {
+            lastSent = "";
+            onChange("");
+          });
+          return;
+        }
         if (event.payload?.text != null) {
-          onChange(event.payload.text || "");
+          lastSent = event.payload.text || "";
+          onChange(lastSent);
         } else {
           push();
         }
@@ -195,13 +231,15 @@ export async function subscribeText(onChange) {
 
 export async function saveFiles(files) {
   const roomId = await getRoomId();
-  return tablesDB.upsertRow({
+  const row = await tablesDB.upsertRow({
     databaseId,
     tableId: filesTableId,
     rowId: roomId,
     data: { files: JSON.stringify(files || []) },
     permissions: publicPermissions,
   });
+  filesRowMissing.delete(roomId);
+  return row;
 }
 
 export async function clearFiles() {
@@ -215,37 +253,70 @@ export async function clearFiles() {
   } catch (error) {
     if (!isNotFound(error)) throw error;
   }
+  filesRowMissing.add(roomId);
+}
+
+async function deleteStoredFiles(fileList) {
+  for (const file of fileList || []) {
+    if (!file?.id) continue;
+    try {
+      await storage.deleteFile({ bucketId, fileId: file.id });
+    } catch {
+      // ignore missing / permission errors
+    }
+  }
 }
 
 export async function getFiles() {
   const roomId = await getRoomId();
+  if (filesRowMissing.has(roomId)) return [];
+
   try {
     const row = await tablesDB.getRow({
       databaseId,
       tableId: filesTableId,
       rowId: roomId,
     });
-    if (!row?.files) return [];
-    return typeof row.files === "string" ? JSON.parse(row.files) : row.files;
+
+    let list = [];
+    if (row?.files) {
+      list = typeof row.files === "string" ? JSON.parse(row.files) : row.files;
+    }
+
+    if (isExpired(row)) {
+      await deleteStoredFiles(list);
+      await clearFiles();
+      return [];
+    }
+
+    filesRowMissing.delete(roomId);
+    return Array.isArray(list) ? list : [];
   } catch (error) {
-    if (isNotFound(error)) return [];
+    if (isNotFound(error)) {
+      filesRowMissing.add(roomId);
+      return [];
+    }
     throw error;
   }
 }
 
 export async function subscribeFiles(onChange) {
   const roomId = await getRoomId();
+  let lastSent = Symbol("init");
 
   const push = async () => {
     try {
-      onChange(await getFiles());
+      const files = await getFiles();
+      const key = JSON.stringify(files);
+      if (key === lastSent) return;
+      lastSent = key;
+      onChange(files);
     } catch (error) {
       console.warn("[SkyShare] files poll failed", error);
     }
   };
 
   await push();
-
   const intervalId = setInterval(push, POLL_MS);
 
   let subscription = null;
@@ -257,15 +328,13 @@ export async function subscribeFiles(onChange) {
           String(name).includes(".delete")
         );
         if (deleted) {
+          filesRowMissing.add(roomId);
+          lastSent = "[]";
           onChange([]);
           return;
         }
-        const raw = event.payload?.files;
-        if (raw == null) {
-          push();
-          return;
-        }
-        onChange(typeof raw === "string" ? JSON.parse(raw) : raw);
+        filesRowMissing.delete(roomId);
+        push();
       }
     );
   } catch (error) {
@@ -299,4 +368,4 @@ export async function uploadFile(file) {
   };
 }
 
-export { client, tablesDB, storage, realtime, bucketId };
+export { client, tablesDB, storage, realtime, bucketId, TTL_MS };

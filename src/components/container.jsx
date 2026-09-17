@@ -31,7 +31,11 @@ const AppContainer = () => {
     const [networkStatus, setNetworkStatus] = useState("Connecting to your Wi‑Fi room…");
 
     const textAreaRef = useRef();
+    /** While true, remote polls must not overwrite what the user is typing */
+    const isEditingRef = useRef(false);
+
     const resizeTextArea = () => {
+        if (!textAreaRef.current) return;
         textAreaRef.current.style.height = "100px";
         textAreaRef.current.style.height = textAreaRef.current.scrollHeight + 12 + "px";
     };
@@ -88,6 +92,7 @@ const AppContainer = () => {
         setSaving(true);
         try {
             await saveText(textValue);
+            isEditingRef.current = false;
             setIsText(!!textValue);
         } catch (error) {
             console.error("Save text failed", error);
@@ -106,13 +111,15 @@ const AppContainer = () => {
             try {
                 await getRoomId();
                 if (!active) return;
-                setNetworkStatus("Only devices on your Wi‑Fi can see this");
+                setNetworkStatus("Only devices on your Wi‑Fi can see this · auto-clears after 10 min");
 
                 unsubText();
                 unsubFiles();
 
                 unsubText = await subscribeText((text) => {
                     if (!active) return;
+                    // Don't wipe the textarea while the user is typing an unsaved draft
+                    if (isEditingRef.current) return;
                     setTextValue(text || "");
                     setIsText(!!text);
                 });
@@ -132,7 +139,6 @@ const AppContainer = () => {
 
         const onVisible = () => {
             if (document.visibilityState === "visible") {
-                // Re-fetch content when returning to the tab (don't reset room — same network)
                 connect();
             }
         };
@@ -149,6 +155,7 @@ const AppContainer = () => {
     const clearTextSection = async () => {
         try {
             await clearText();
+            isEditingRef.current = false;
             setTextValue("");
             setIsText(false);
         } catch (error) {
@@ -194,6 +201,7 @@ const AppContainer = () => {
                                     onInput={resizeTextArea}
                                     value={textValue}
                                     onChange={(e) => {
+                                        isEditingRef.current = true;
                                         setTextValue(e.target.value);
                                         setIsText(false);
                                     }}
